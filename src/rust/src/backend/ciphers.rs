@@ -7,7 +7,7 @@ use crate::buf::{CffiBuf, CffiMutBuf};
 use crate::error::{CryptographyError, CryptographyResult};
 use crate::exceptions;
 use crate::types;
-use pyo3::types::PyAnyMethods;
+use pyo3::types::{PyAnyMethods, PyBytes};
 use pyo3::IntoPy;
 
 pub(crate) struct CipherContext {
@@ -159,13 +159,14 @@ impl CipherContext {
         data: &[u8],
     ) -> CryptographyResult<pyo3::Bound<'p, pyo3::types::PyBytes>> {
         let mut buf = vec![0; data.len() + self.ctx.block_size()];
-        let n = self.update_into(py, data, &mut buf)?;
+        let is_xts = self.py_mode.bind(py).is_instance(&types::XTS.get(py)?)?;
+        let n = py.allow_threads(|| self.update_into(is_xts, data, &mut buf))?;
         Ok(pyo3::types::PyBytes::new_bound(py, &buf[..n]))
     }
 
     pub(crate) fn update_into(
         &mut self,
-        py: pyo3::Python<'_>,
+        is_xts: bool,
         data: &[u8],
         buf: &mut [u8],
     ) -> CryptographyResult<usize> {
@@ -179,26 +180,22 @@ impl CipherContext {
         }
 
         let mut total_written = 0;
-        let is_xts = self.py_mode.bind(py).is_instance(&types::XTS.get(py)?)?;
-        py.allow_threads::<CryptographyResult<()>, _>(|| {
-            for chunk in data.chunks(1 << 29) {
-                // SAFETY: We ensure that outbuf is sufficiently large above.
-                unsafe {
-                    let n = if is_xts {
-                        self.ctx.cipher_update_unchecked(chunk, Some(&mut buf[total_written..])).map_err(|_| {
+        for chunk in data.chunks(1 << 29) {
+            // SAFETY: We ensure that outbuf is sufficiently large above.
+            unsafe {
+                let n = if is_xts {
+                    self.ctx.cipher_update_unchecked(chunk, Some(&mut buf[total_written..])).map_err(|_| {
                             pyo3::exceptions::PyValueError::new_err(
                                 "In XTS mode you must supply at least a full block in the first update call. For AES this is 16 bytes."
                             )
                         })?
-                    } else {
-                        self.ctx
-                            .cipher_update_unchecked(chunk, Some(&mut buf[total_written..]))?
-                    };
-                    total_written += n;
-                }
+                } else {
+                    self.ctx
+                        .cipher_update_unchecked(chunk, Some(&mut buf[total_written..]))?
+                };
+                total_written += n;
             }
-            Ok(())
-        })?;
+        }
 
         Ok(total_written)
     }
@@ -283,11 +280,11 @@ impl PyCipherContext {
 
     fn update_into(
         &mut self,
-        py: pyo3::Python<'_>,
+        _py: pyo3::Python<'_>,
         data: CffiBuf<'_>,
         mut buf: CffiMutBuf<'_>,
     ) -> CryptographyResult<usize> {
-        get_mut_ctx(self.ctx.as_mut())?.update_into(py, data.as_bytes(), buf.as_mut_bytes())
+        get_mut_ctx(self.ctx.as_mut())?.update_into(false, data.as_bytes(), buf.as_mut_bytes())
     }
 
     fn finalize<'p>(
@@ -321,7 +318,7 @@ impl PyAEADEncryptionContext {
 
     fn update_into(
         &mut self,
-        py: pyo3::Python<'_>,
+        _py: pyo3::Python<'_>,
         data: CffiBuf<'_>,
         mut buf: CffiMutBuf<'_>,
     ) -> CryptographyResult<usize> {
@@ -334,7 +331,7 @@ impl PyAEADEncryptionContext {
             .ok_or_else(|| {
                 pyo3::exceptions::PyValueError::new_err("Exceeded maximum encrypted byte limit")
             })?;
-        get_mut_ctx(self.ctx.as_mut())?.update_into(py, data, buf.as_mut_bytes())
+        get_mut_ctx(self.ctx.as_mut())?.update_into(false, data, buf.as_mut_bytes())
     }
 
     fn authenticate_additional_data(&mut self, data: CffiBuf<'_>) -> CryptographyResult<()> {
@@ -412,7 +409,7 @@ impl PyAEADDecryptionContext {
 
     fn update_into(
         &mut self,
-        py: pyo3::Python<'_>,
+        _py: pyo3::Python<'_>,
         data: CffiBuf<'_>,
         mut buf: CffiMutBuf<'_>,
     ) -> CryptographyResult<usize> {
@@ -425,7 +422,7 @@ impl PyAEADDecryptionContext {
             .ok_or_else(|| {
                 pyo3::exceptions::PyValueError::new_err("Exceeded maximum encrypted byte limit")
             })?;
-        get_mut_ctx(self.ctx.as_mut())?.update_into(py, data, buf.as_mut_bytes())
+        get_mut_ctx(self.ctx.as_mut())?.update_into(false, data, buf.as_mut_bytes())
     }
 
     fn authenticate_additional_data(&mut self, data: CffiBuf<'_>) -> CryptographyResult<()> {
