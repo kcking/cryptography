@@ -158,9 +158,12 @@ impl CipherContext {
         py: pyo3::Python<'p>,
         data: &[u8],
     ) -> CryptographyResult<pyo3::Bound<'p, pyo3::types::PyBytes>> {
-        let mut buf = vec![0; data.len() + self.ctx.block_size()];
         let is_xts = self.py_mode.bind(py).is_instance(&types::XTS.get(py)?)?;
-        let n = py.allow_threads(|| self.update_into(is_xts, data, &mut buf))?;
+        let (buf, n) = py.allow_threads::<CryptographyResult<_>, _>(|| {
+            let mut buf = vec![0; data.len() + self.ctx.block_size()];
+            let n = self.update_into(is_xts, data, &mut buf)?;
+            Ok((buf, n))
+        })?;
         Ok(pyo3::types::PyBytes::new_bound(py, &buf[..n]))
     }
 

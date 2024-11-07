@@ -5,7 +5,7 @@ from cryptography.hazmat.backends import default_backend
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 
 
-def encrypt_chunk(chunk):
+def encrypt_chunk(chunk: bytes):
     cipher = Cipher(
         algorithms.AES(b"a" * 32),
         modes.CTR(b"b" * 16),
@@ -18,9 +18,7 @@ def encrypt_chunk(chunk):
 def test(n: int, threads: int):
     ptxt = b"b" * n
     chunk_size = n // threads
-    chunks = [
-        ptxt[i * chunk_size : (i + 1) * chunk_size] for i in range(threads)
-    ]
+    chunks = [ptxt[i * chunk_size : (i + 1) * chunk_size] for i in range(threads)]
 
     start = time.time()
     with ThreadPoolExecutor(max_workers=threads) as executor:
